@@ -56,6 +56,7 @@ use CAF::FileEditor;
 use CAF::FileReader;
 use CAF::Process;
 use CAF::Object;
+use CAF::Service;
 
 use Encode qw(encode_utf8);
 use Fcntl qw(SEEK_SET);
@@ -695,7 +696,7 @@ sub configureNode {
           $self->info("Checking configuration for ".$role);
           $self->updateRoleConfig($role,$config_options);
           for my $service ($self->getRoleServices($role)) {
-            $self->enableService($service);
+            $enabled_service_list->{$service} = 1;     # Value is useless
           }
         } else {
           $self->info("Checking that role ".$role." is disabled...");        
@@ -1553,43 +1554,6 @@ sub getServiceRestartList {
   return $service_list;
 }
 
-# Enable a service to be started during system startup
-#
-# Arguments :
-#  service : name of the service
-sub enableService {
-  my $function_name = "enableService";
-  my $self = shift;
-
-  my $service = shift;
-  unless ( $service ) {
-    $self->error("$function_name: 'service' argument missing (internal error)");
-    return 0;
-  }
-
-  $self->debug(1,"$function_name: checking if service $service is enabled");
-
-  unless ( -f "/etc/rc.d/init.d/$service" || $CAF::Object::NoAction ) {
-    $self->error("Startup script not found for service $service");
-    return 1;
-  }
-
-  CAF::Process->new([$chkconfig, $service],log=>$self)->run();
-  if ( $? ) {
-    # No need to do chkconfig --add first, done by default
-    $self->info("Enabling service $service at startup");
-    CAF::Process->new([$chkconfig, $service, "on"],log=>$self)->run();
-    if ( $? ) {
-      $self->error("Failed to enable service $service");
-    }
-  } elsif ( ! $CAF::Object::NoAction ) {
-    $self->debug(2,"$function_name: $service already enabled");
-  }
-
-  $enabled_service_list->{$service} = 1;     # Value is useless
-
-}
-
 
 # Generate an init script to control (start/stop/restart) all enabled services.
 
@@ -1644,22 +1608,22 @@ sub restartServices {
     $self->debug(1,"$function_name: list of services to restart : ".join(" ",keys(%$service_restart_list)));
     for my $service (keys %$service_restart_list) {
       $self->info("Restarting service $service");
-      CAF::Process->new([$servicecmd, $service, "stop"],log=>$self)->run();
+      my %opt;
+      my $srv = CAF::Service->new(["$service"], log=>$self, %opt);
+      $srv->stop();
       if ( $? ) {
         # Service can be stopped, don't consider failure to stop as an error
         $self->warn("\tFailed to stop $service");
       }
       sleep 5;    # Give time to the daemon to shut down
-      my $attempt = 10;
+      my $attempt = 5;
       my $status;
-      my $command = CAF::Process->new([$servicecmd, $service, "start"],log=>$self);
-      $command->run();
-      $status = $?;
-      while ( $attempt && $status ) {
-        $self->debug(1,"$function_name: $service startup failed (probably not shutdown yet). Retrying ($attempt attempts remaining)");
+      $srv->start();
+      while ( $attempt && $? ) {
+        $self->verbose("$service startup failed (probably not shutdown yet). Retrying ($attempt attempts remaining)");
         sleep 5;
         $attempt--;
-        $command->run();
+        $srv->start();
         $status = $?;
       }
       if ( $status ) {

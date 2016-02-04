@@ -9,6 +9,20 @@ use Readonly;
 use CAF::Object;
 Test::NoWarnings::clear_warnings();
 
+my $mock = Test::MockModule->new('CAF::Service');
+our ($start, $stop);
+$mock->mock('start', sub {
+    my $self = shift;
+    $start += scalar @{$self->{services}};
+    return 0;
+});
+$mock->mock('stop', sub {
+    my $self = shift;
+    $stop += scalar @{$self->{services}};
+    return 0;
+});
+
+
 =pod
 
 =head1 SYNOPSIS
